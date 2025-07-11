@@ -1024,11 +1024,11 @@ if __name__ == '__main__':
 
     ## Many algos
     paths_to_results_ = [
-        "/home/van/Desktop/results/sacred/maven/mpe_SimpleSpread-8-v0"
+        "/home/van/Desktop/LBF/results/sacred/maven/lbforaging:Foraging-4s-11x11-3p-2f-coop-v2"
     ]
     algo_names_ = ["MAVEN"]
-    env_name_ = "MPE"
-    path_to_save_ = "~/Desktop/plots/MPE/"
+    env_name_ = "LBF"
+    path_to_save_ = "~/Desktop/LBF/plots/"
 
     plot_train_ = False
     plot_legend_bool_ = False
@@ -1040,7 +1040,6 @@ if __name__ == '__main__':
         plot_train_,
         plot_legend_bool_
     )
-
     ## Average plots per algo for all tasks of a benchmark
     # _paths_to_pickle_results = [
     #     "~/multiple-exps-plots/pistonball_v6/all_results_env=pistonball_v6.pkl",
