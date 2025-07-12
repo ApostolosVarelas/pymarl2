@@ -187,7 +187,6 @@ class ParallelRunner:
         
         if hasattr(self.args, "noise_dim") and self.args.noise_dim is not None:
             if test_mode and not self._in_test_phase:
-                print(f"\n--- New test phase started at t_env={self.t_env}. Clearing test-specific noise data. ---\n")
                 self.noise_returns = {}
                 self.noise_test_won = {}
         
@@ -349,7 +348,6 @@ class ParallelRunner:
         n_test_runs = max(1, self.args.test_nepisode // self.batch_size) * self.batch_size
  
         if test_mode and (len(self.test_returns) >= n_test_runs):
-            self._run_data_consistency_check()
             self._log(cur_returns, cur_stats, log_prefix)
             if hasattr(self.args, "noise_dim") and self.args.noise_dim is not None:
                 self._log_noise_returns(test_mode, test_uniform)
@@ -365,30 +363,6 @@ class ParallelRunner:
             self.log_train_stats_t = self.t_env
  
         return self.batch
-
-    def _run_data_consistency_check(self):
-        """
-        A temporary debugging function to print the state of the data containers
-        just before they are logged. This helps verify data consistency.
-        """
-        print("\n--- DATA CONSISTENCY CHECK ---")
-        # 1. Analyze the global `self.test_returns` list
-        global_returns_list = self.test_returns
-        global_count = len(global_returns_list)
-        global_sum = sum(global_returns_list)
-        global_mean = np.mean(global_returns_list) if global_count > 0 else 0
-        print(f"Global Returns Sum: {global_sum:.4f} (from {global_count} episodes)")
- 
-        # 2. Analyze the MAVEN `self.noise_returns` dictionary
-        noise_sum = sum(sum(v) for v in self.noise_returns.values())
-        noise_count = sum(len(v) for v in self.noise_returns.values())
-        print(f"Noise Returns Sum:  {noise_sum:.4f} (from {noise_count} episodes)")
-        # 3. The Crucial Comparison
-        if np.isclose(global_sum, noise_sum):
-            print("CONCLUSION: Data is consistent for this test cycle.")
-        else:
-            print("CONCLUSION: WARNING! Data is INCONSISTENT for this test cycle.")
-        print("----------------------------\n")
     
     def _log(self, returns, stats, prefix):
         self.logger.log_stat(prefix + "return_mean", np.mean(returns), self.t_env)
