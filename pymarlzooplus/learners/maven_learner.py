@@ -31,14 +31,11 @@ class MavenLearner:
 
         discrim_input = np.prod(self.args.state_shape) + self.args.n_agents * self.args.n_actions
 
-        if self.args.rnn_discrim:
-            self.rnn_agg = RNNAggregator(discrim_input, args)
-            self.discrim = Discrim(args.rnn_agg_size, self.args.noise_dim, args)
-            self.params += list(self.discrim.parameters())
-            self.params += list(self.rnn_agg.parameters())
-        else:
-            self.discrim = Discrim(discrim_input, self.args.noise_dim, args)
-            self.params += list(self.discrim.parameters())
+        self.rnn_agg = RNNAggregator(discrim_input, args)
+        self.discrim = Discrim(args.rnn_agg_size, self.args.noise_dim, args)
+        self.params += list(self.discrim.parameters())
+        self.params += list(self.rnn_agg.parameters())
+        
         self.discrim_loss = th.nn.CrossEntropyLoss(reduction="none")
 
         self.optimiser = RMSprop(params=self.params, lr=args.lr, alpha=args.optim_alpha, eps=args.optim_eps)
@@ -55,7 +52,7 @@ class MavenLearner:
         rewards = batch["reward"][:, :-1]
         actions = batch["actions"][:, :-1]
         terminated = batch["terminated"][:, :-1].float()
-        mask = batch["filled"][:, :-1].float().clone()  # ✅ clone to prevent in-place op issue
+        mask = batch["filled"][:, :-1].float().clone() 
         mask[:, 1:] = mask[:, 1:] * (1 - terminated[:, :-1])
         avail_actions = batch["avail_actions"]
         noise = batch["noise"][:, 0].unsqueeze(1).repeat(1, rewards.shape[1], 1)
@@ -80,12 +77,12 @@ class MavenLearner:
         target_mac_out = th.stack(target_mac_out[1:], dim=1)  # Skip first timestep
 
         # Mask out unavailable actions
-        target_mac_out = target_mac_out.clone()  # ✅ clone before modifying
+        target_mac_out = target_mac_out.clone() 
         target_mac_out[avail_actions[:, 1:] == 0] = -9999999
 
         # Max over target Q-Values
         if self.args.double_q:
-            mac_out = mac_out.clone()  # ✅ clone before modifying
+            mac_out = mac_out.clone() 
             mac_out[avail_actions == 0] = -9999999
             cur_max_actions = mac_out[:, 1:].max(dim=3, keepdim=True)[1]
             target_max_qvals = th.gather(target_mac_out, 3, cur_max_actions).squeeze(3)
@@ -98,60 +95,41 @@ class MavenLearner:
             target_max_qvals = self.target_mixer(target_max_qvals, batch["state"][:, 1:], noise)
 
         # Discriminator
-        mac_out = mac_out.clone()  # ✅ clone before modifying again
+        mac_out = mac_out.clone() 
         mac_out[avail_actions == 0] = -9999999
         q_softmax_actions = th.nn.functional.softmax(mac_out[:, :-1], dim=3)
-
-        if self.args.hard_qs:
-            maxs = th.max(mac_out[:, :-1], dim=3, keepdim=True)[1]
-            zeros = th.zeros_like(q_softmax_actions)
-            q_softmax_actions = zeros.scatter(dim=3, index=maxs, value=1)  # ✅ avoid scatter_
 
         q_softmax_agents = q_softmax_actions.reshape(q_softmax_actions.shape[0], q_softmax_actions.shape[1], -1)
 
         states = batch["state"][:, :-1]
         state_and_softactions = th.cat([q_softmax_agents, states], dim=2)
 
-        if self.args.rnn_discrim:
-            h_to_use = th.zeros(size=(batch.batch_size, self.args.rnn_agg_size)).to(states.device)
-            hs = th.ones_like(h_to_use)
-            for t in range(batch.max_seq_length - 1):
-                hs = self.rnn_agg(state_and_softactions[:, t], hs)
-                for b in range(batch.batch_size):
-                    if t == batch.max_seq_length - 2 or (mask[b, t] == 1 and mask[b, t + 1] == 0):
-                        h_to_use[b] = hs[b]
-            s_and_softa_reshaped = h_to_use
-        else:
-            s_and_softa_reshaped = state_and_softactions.reshape(-1, state_and_softactions.shape[-1])
-
-        if self.args.mi_intrinsic:
-            s_and_softa_reshaped = s_and_softa_reshaped.detach()
-
+        h_to_use = th.zeros(size=(batch.batch_size, self.args.rnn_agg_size)).to(states.device)
+        hs = th.ones_like(h_to_use)
+        for t in range(batch.max_seq_length - 1):
+            hs = self.rnn_agg(state_and_softactions[:, t], hs)
+            for b in range(batch.batch_size):
+                if t == batch.max_seq_length - 2 or (mask[b, t] == 1 and mask[b, t + 1] == 0):
+                    h_to_use[b] = hs[b]
+        s_and_softa_reshaped = h_to_use
+            
         discrim_prediction = self.discrim(s_and_softa_reshaped)
 
+        # Cross-Entropy
         target_repeats = 1
-        if not self.args.rnn_discrim:
-            target_repeats = q_softmax_actions.shape[1]
         discrim_target = batch["noise"][:, 0].long().detach().max(dim=1)[1].unsqueeze(1).repeat(1, target_repeats).reshape(-1)
         discrim_loss = self.discrim_loss(discrim_prediction, discrim_target)
 
-        if self.args.rnn_discrim:
-            averaged_discrim_loss = discrim_loss.mean()
-        else:
-            masked_discrim_loss = discrim_loss * mask.reshape(-1)
-            averaged_discrim_loss = masked_discrim_loss.sum() / mask.sum()
+        averaged_discrim_loss = discrim_loss.mean()
         self.logger.log_stat("discrim_loss", averaged_discrim_loss.item(), t_env)
 
         # Calculate 1-step Q-Learning targets
         targets = rewards + self.args.gamma * (1 - terminated) * target_max_qvals
-        if self.args.mi_intrinsic:
-            assert self.args.rnn_discrim is False
-            targets = targets + self.args.mi_scaler * discrim_loss.view_as(rewards)
 
         # Td-error
         td_error = (chosen_action_qvals - targets.detach())
 
-        mask_expanded = mask.expand_as(td_error)  # ✅ safer expansion
+        mask_expanded = mask.expand_as(td_error)
         masked_td_error = td_error * mask_expanded
 
         # Normal L2 loss, take mean over actual data
@@ -189,8 +167,7 @@ class MavenLearner:
         self.mac.cuda()
         self.target_mac.cuda()
         self.discrim.cuda()
-        if self.args.rnn_discrim:
-            self.rnn_agg.cuda()
+        self.rnn_agg.cuda()
         if self.mixer is not None:
             self.mixer.cuda()
             self.target_mixer.cuda()
